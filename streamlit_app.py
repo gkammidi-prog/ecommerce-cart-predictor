@@ -31,11 +31,30 @@ st.markdown(
 )
 st.markdown("---")
 
+
+# ── SHAP helper — handles every possible output shape ────────────────────────
+def fix_shap(sv, ev):
+    """Normalise SHAP values and expected value to 1-D array + scalar."""
+    # List output (multi-class trees)
+    if isinstance(sv, list):
+        sv = sv[1] if len(sv) > 1 else sv[0]
+    sv = np.array(sv)
+    # 3-D output: (samples, features, classes) — take class-1 slice
+    if sv.ndim == 3:
+        sv = sv[:, :, 1]
+    # Expected value
+    if isinstance(ev, (list, np.ndarray)):
+        arr = np.array(ev).flat
+        ev = float(list(arr)[1]) if np.array(ev).size > 1 else float(list(arr)[0])
+    else:
+        ev = float(ev)
+    return sv, ev
+
+
 # ── Load & prepare data ───────────────────────────────────────────────────────
 @st.cache_data
 def load_and_prepare():
     if os.path.exists('data/2019-Nov.csv'):
-        # Local — use real data
         df = pd.read_csv('data/2019-Nov.csv', nrows=200000)
         session = df.groupby('user_session').agg(
             event_count    =('event_type', 'count'),
@@ -52,37 +71,34 @@ def load_and_prepare():
                      'avg_price', 'unique_products']]
         y = session['abandoned']
     else:
-        # Streamlit Cloud — generate realistic synthetic data
         rng = np.random.default_rng(42)
         n = 10000
-        n_abandoned = int(n * 0.017)
-        n_purchased = n - n_abandoned
+        n_ab = int(n * 0.017)
+        n_pu = n - n_ab
 
         def make_sessions(size, abandoned):
-            cart    = rng.integers(1, 8, size) if abandoned else rng.integers(0, 3, size)
-            views   = rng.integers(3, 20, size) if abandoned else rng.integers(1, 15, size)
-            events  = cart + views + rng.integers(1, 5, size)
-            price   = rng.uniform(10, 300, size) if abandoned else rng.uniform(5, 200, size)
-            unique  = rng.integers(2, 10, size)
+            cart  = rng.integers(1, 8, size) if abandoned else rng.integers(0, 3, size)
+            views = rng.integers(3, 20, size) if abandoned else rng.integers(1, 15, size)
+            price = rng.uniform(10, 300, size) if abandoned else rng.uniform(5, 200, size)
             return pd.DataFrame({
-                'event_count':     events,
+                'event_count':     cart + views + rng.integers(1, 5, size),
                 'cart_events':     cart,
                 'view_events':     views,
                 'avg_price':       price,
-                'unique_products': unique,
+                'unique_products': rng.integers(2, 10, size),
                 'abandoned':       int(abandoned)
             })
 
         df = pd.concat([
-            make_sessions(n_purchased, False),
-            make_sessions(n_abandoned, True)
+            make_sessions(n_pu, False),
+            make_sessions(n_ab, True)
         ], ignore_index=True).sample(frac=1, random_state=42).reset_index(drop=True)
-
         X = df[['event_count', 'cart_events', 'view_events',
                 'avg_price', 'unique_products']]
         y = df['abandoned']
 
     return X, y
+
 
 # ── Train all 6 models ────────────────────────────────────────────────────────
 @st.cache_resource
@@ -125,6 +141,7 @@ def train_all_models():
     results_df = pd.DataFrame(results).sort_values('AUC-ROC', ascending=False)
     return trained, results_df, X_test, y_test, X.columns.tolist()
 
+
 with st.spinner("Training all 6 models — please wait ~60 seconds on first load..."):
     trained, results_df, X_test, y_test, feature_names = train_all_models()
 
@@ -146,6 +163,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🧠 SHAP Explainability",
     "🔮 Live Predictor"
 ])
+
 
 # =============================================================================
 # TAB 1 — INDIVIDUAL MODEL ANALYSIS
@@ -256,6 +274,7 @@ with tab1:
     else:
         st.info(f"{selected} does not expose direct feature importances.")
 
+
 # =============================================================================
 # TAB 2 — HEAD-TO-HEAD COMPARISON
 # =============================================================================
@@ -315,6 +334,7 @@ with tab2:
     st.pyplot(fig_roc)
     plt.close()
 
+
 # =============================================================================
 # TAB 3 — WHY XGBOOST WON
 # =============================================================================
@@ -357,6 +377,7 @@ and fewest false alarms. Right choice depends on business goal.
         f"F1: {best_row['F1 Score']}"
     )
 
+
 # =============================================================================
 # TAB 4 — SHAP EXPLAINABILITY
 # =============================================================================
@@ -370,11 +391,13 @@ with tab4:
     best_model_obj = trained[best_name]['model']
     sample    = X_test.iloc[:100]
     explainer = shap.TreeExplainer(best_model_obj)
-    shap_vals = explainer.shap_values(sample)
+    raw_sv    = explainer.shap_values(sample)
+    shap_vals, base_val = fix_shap(raw_sv, explainer.expected_value)
 
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Global feature importance")
+        fig_s1, _ = plt.subplots(figsize=(6, 4))
         shap.summary_plot(shap_vals, sample, plot_type="bar",
                           feature_names=feature_names, show=False)
         st.pyplot(plt.gcf())
@@ -383,6 +406,7 @@ with tab4:
 
     with col2:
         st.subheader("SHAP value distribution")
+        fig_s2, _ = plt.subplots(figsize=(6, 4))
         shap.summary_plot(shap_vals, sample,
                           feature_names=feature_names, show=False)
         st.pyplot(plt.gcf())
@@ -391,24 +415,20 @@ with tab4:
 
     st.markdown("---")
     st.subheader("Single session waterfall — why was this session flagged?")
-    idx = st.slider("Select session index", 0, 99, 0)
-    sv = shap_vals[idx] if not isinstance(shap_vals, list) else shap_vals[0][idx]
-    ev = explainer.expected_value
-    if isinstance(ev, np.ndarray):
-      ev = float(ev.mean())
-    elif isinstance(ev, list):
-       ev = ev[0]
+    max_idx = len(shap_vals) - 1
+    idx = st.slider("Select session index", 0, min(99, max_idx), 0)
 
     fig_w, _ = plt.subplots(figsize=(8, 4))
     shap.waterfall_plot(
         shap.Explanation(
-            values=sv,
-            base_values=ev,
+            values=shap_vals[idx],
+            base_values=base_val,
             feature_names=feature_names
         ), show=False
     )
     st.pyplot(fig_w)
     plt.close()
+
 
 # =============================================================================
 # TAB 5 — LIVE PREDICTOR
@@ -456,23 +476,20 @@ with tab5:
         st.markdown("---")
         st.subheader("Why this prediction?")
         ex = shap.TreeExplainer(trained[best_name]['model'])
-        sv = ex.shap_values(input_df)
-        sv = sv[0] if isinstance(sv, list) else sv
-        ev = ex.expected_value
-        if isinstance(ev, np.ndarray):
-          ev = float(ev.mean())
-        elif isinstance(ev, list):
-         ev = ev[0]
+        raw_sv_pred = ex.shap_values(input_df)
+        sv_pred, ev_pred = fix_shap(raw_sv_pred, ex.expected_value)
+
         fig_p, _ = plt.subplots(figsize=(8, 3))
         shap.waterfall_plot(
             shap.Explanation(
-                values=sv[0],
-                base_values=ev,
+                values=sv_pred[0],
+                base_values=ev_pred,
                 feature_names=feature_names
             ), show=False
         )
         st.pyplot(fig_p)
         plt.close()
+
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("---")
