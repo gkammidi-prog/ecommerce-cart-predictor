@@ -2,7 +2,7 @@
 
 > 6-algorithm ML benchmark — individual model analysis — SHAP explainability — live predictions
 
-**[🚀 Live Demo](https://ecommerce-cart-predictor-2rdexii9pkuaxgxtmkxdix.streamlit.app/)** &nbsp;·&nbsp; [LinkedIn](https://linkedin.com/in/gayathrikammidi) &nbsp;·&nbsp; [GitHub](https://github.com/gkammidi-prog)
+**[🚀 Live Demo](https://ecommerce-cart-predictor-2rdexii9pkuaxgxtmkxdix.streamlit.app/)** &nbsp;·&nbsp; [LinkedIn](https://www.linkedin.com/in/gayathri-kambidi-0714j/) &nbsp;·&nbsp; [GitHub](https://github.com/gkammidi-prog)
 
 ---
 
@@ -147,4 +147,4 @@ Features engineered at session level: event count, cart events, view events, ave
 MS Computer Science · Governors State University · May 2026
 4+ years in Data Engineering & ML — GCP · BigQuery · Airflow · Python · XGBoost
 
-[LinkedIn](https://linkedin.com/in/gayathrikammidi) · [GitHub](https://github.com/gkammidi-prog)
+[LinkedIn](https://www.linkedin.com/in/gayathri-kambidi-0714j/) · [GitHub](https://github.com/gkammidi-prog)
