@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -30,25 +31,60 @@ st.markdown(
 )
 st.markdown("---")
 
+# ── Load & prepare data ───────────────────────────────────────────────────────
 @st.cache_data
 def load_and_prepare():
-    df = pd.read_csv('data/2019-Nov.csv', nrows=200000)
-    session = df.groupby('user_session').agg(
-        event_count    =('event_type', 'count'),
-        cart_events    =('event_type', lambda x: (x == 'cart').sum()),
-        view_events    =('event_type', lambda x: (x == 'view').sum()),
-        purchase_events=('event_type', lambda x: (x == 'purchase').sum()),
-        avg_price      =('price', 'mean'),
-        unique_products=('product_id', 'nunique')
-    ).reset_index()
-    session['abandoned'] = (
-        (session['cart_events'] > 0) & (session['purchase_events'] == 0)
-    ).astype(int)
-    X = session[['event_count', 'cart_events', 'view_events',
-                 'avg_price', 'unique_products']]
-    y = session['abandoned']
+    if os.path.exists('data/2019-Nov.csv'):
+        # Local — use real data
+        df = pd.read_csv('data/2019-Nov.csv', nrows=200000)
+        session = df.groupby('user_session').agg(
+            event_count    =('event_type', 'count'),
+            cart_events    =('event_type', lambda x: (x == 'cart').sum()),
+            view_events    =('event_type', lambda x: (x == 'view').sum()),
+            purchase_events=('event_type', lambda x: (x == 'purchase').sum()),
+            avg_price      =('price', 'mean'),
+            unique_products=('product_id', 'nunique')
+        ).reset_index()
+        session['abandoned'] = (
+            (session['cart_events'] > 0) & (session['purchase_events'] == 0)
+        ).astype(int)
+        X = session[['event_count', 'cart_events', 'view_events',
+                     'avg_price', 'unique_products']]
+        y = session['abandoned']
+    else:
+        # Streamlit Cloud — generate realistic synthetic data
+        rng = np.random.default_rng(42)
+        n = 10000
+        n_abandoned = int(n * 0.017)
+        n_purchased = n - n_abandoned
+
+        def make_sessions(size, abandoned):
+            cart    = rng.integers(1, 8, size) if abandoned else rng.integers(0, 3, size)
+            views   = rng.integers(3, 20, size) if abandoned else rng.integers(1, 15, size)
+            events  = cart + views + rng.integers(1, 5, size)
+            price   = rng.uniform(10, 300, size) if abandoned else rng.uniform(5, 200, size)
+            unique  = rng.integers(2, 10, size)
+            return pd.DataFrame({
+                'event_count':     events,
+                'cart_events':     cart,
+                'view_events':     views,
+                'avg_price':       price,
+                'unique_products': unique,
+                'abandoned':       int(abandoned)
+            })
+
+        df = pd.concat([
+            make_sessions(n_purchased, False),
+            make_sessions(n_abandoned, True)
+        ], ignore_index=True).sample(frac=1, random_state=42).reset_index(drop=True)
+
+        X = df[['event_count', 'cart_events', 'view_events',
+                'avg_price', 'unique_products']]
+        y = df['abandoned']
+
     return X, y
 
+# ── Train all 6 models ────────────────────────────────────────────────────────
 @st.cache_resource
 def train_all_models():
     X, y = load_and_prepare()
@@ -295,7 +331,7 @@ with tab3:
   Trees capture these interactions; linear models miss them.
 - **Class imbalance** — SMOTE + XGBoost handles minority class better
   than distance-based models.
-- **Mixed feature scales** — tree models don't need feature scaling
+- **Mixed feature scales** — tree models do not need feature scaling
   unlike Logistic Regression or KNN.
         """)
 
@@ -303,26 +339,23 @@ with tab3:
         st.subheader("Why KNN ranked last")
         st.markdown("""
 - **Curse of dimensionality** — distance metrics lose meaning as features increase
-- **No generalisation** — memorises training data, doesn't learn patterns
-- **Scale sensitivity** — price ($0–500) dominates event counts (0–50)
+- **No generalisation** — memorises training data, does not learn patterns
+- **Scale sensitivity** — price ($0-500) dominates event counts (0-50)
 - **Result** — AUC 0.848, missed 52 sessions, 463 false alarms
 
-**Key insight:** Highest AUC ≠ always best model.
+**Key insight:** Highest AUC does not always mean best model.
 Decision Tree had lower AUC than XGBoost but better F1
 and fewest false alarms. Right choice depends on business goal.
         """)
 
     st.markdown("---")
     best_row = results_df[results_df['Model'] == best_name].iloc[0]
-    st.success(f"""
-**Selected model: {best_name}**
-AUC-ROC: {best_row['AUC-ROC']} | Recall: {best_row['Recall']} | F1: {best_row['F1 Score']}
-
-XGBoost's sequential error-correction captures non-linear interactions
-between session features that linear models miss. On structured tabular
-e-commerce data, gradient boosting consistently outperforms other algorithm
-families — this 6-model benchmark confirms it.
-    """)
+    st.success(
+        f"Selected model: {best_name} — "
+        f"AUC-ROC: {best_row['AUC-ROC']} | "
+        f"Recall: {best_row['Recall']} | "
+        f"F1: {best_row['F1 Score']}"
+    )
 
 # =============================================================================
 # TAB 4 — SHAP EXPLAINABILITY
@@ -335,9 +368,9 @@ with tab4:
     )
 
     best_model_obj = trained[best_name]['model']
-    sample     = X_test.iloc[:100]
-    explainer  = shap.TreeExplainer(best_model_obj)
-    shap_vals  = explainer.shap_values(sample)
+    sample    = X_test.iloc[:100]
+    explainer = shap.TreeExplainer(best_model_obj)
+    shap_vals = explainer.shap_values(sample)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -412,11 +445,11 @@ with tab5:
         c2.metric("Abandonment Probability", f"{prob * 100:.1f}%")
 
         if prob > 0.7:
-            st.error("⚠️ Trigger intervention — show discount coupon or reminder")
+            st.error("Trigger intervention — show discount coupon or reminder")
         elif prob > 0.5:
-            st.warning("🟡 Borderline — monitor this session closely")
+            st.warning("Borderline — monitor this session closely")
         else:
-            st.success("✅ Session looks healthy — likely to convert")
+            st.success("Session looks healthy — likely to convert")
 
         st.markdown("---")
         st.subheader("Why this prediction?")
@@ -436,6 +469,7 @@ with tab5:
         st.pyplot(fig_p)
         plt.close()
 
+# ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown(
     "**Gayathri Kammidi** · MS Computer Science, Governors State University · May 2026  \n"
