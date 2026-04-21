@@ -392,10 +392,12 @@ with tab4:
     st.markdown("---")
     st.subheader("Single session waterfall — why was this session flagged?")
     idx = st.slider("Select session index", 0, 99, 0)
-    sv  = shap_vals[idx]
-    ev  = explainer.expected_value
-    if isinstance(ev, list):
-        ev = ev[1]
+    sv = shap_vals[idx] if not isinstance(shap_vals, list) else shap_vals[0][idx]
+    ev = explainer.expected_value
+    if isinstance(ev, np.ndarray):
+      ev = float(ev.mean())
+    elif isinstance(ev, list):
+       ev = ev[0]
 
     fig_w, _ = plt.subplots(figsize=(8, 4))
     shap.waterfall_plot(
@@ -455,9 +457,12 @@ with tab5:
         st.subheader("Why this prediction?")
         ex = shap.TreeExplainer(trained[best_name]['model'])
         sv = ex.shap_values(input_df)
+        sv = sv[0] if isinstance(sv, list) else sv
         ev = ex.expected_value
-        if isinstance(ev, list):
-            ev = ev[1]
+        if isinstance(ev, np.ndarray):
+          ev = float(ev.mean())
+        elif isinstance(ev, list):
+         ev = ev[0]
         fig_p, _ = plt.subplots(figsize=(8, 3))
         shap.waterfall_plot(
             shap.Explanation(
